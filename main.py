@@ -9,13 +9,34 @@ import pyautogui
 from PIL import Image, ImageGrab, ImageDraw, ImageFont
 from openai import OpenAI
 from dotenv import load_dotenv
+from prompts import SYSTEM_PROMPT_TEXT, DEFAULT_PROMPT
 
+
+# ---------------------------------------------------------------------------- #
+#                                     TODO                                     #
+# ---------------------------------------------------------------------------- #
+
+#  TODO: Test to understant if this exception is for human mouse movement, automated movement, or both.
+    # raise FailSafeException(
+    #         "PyAutoGUI fail-safe triggered from mouse moving to a corner of the screen. To disable this fail-safe, set pyautogui.FAILSAFE to False. DISABLING FAIL-SAFE IS NOT RECOMMENDED."
+    #     )
+
+# TODO: iterate on algorithm to improve its ability to conduct tasks
+
+# TODO: Create bite maker for complex tasks.
+
+# TODO: Create router to decide if task is complex or direct.
+ 
 # =============================================================================
 # Constants
 # =============================================================================
 
+
+load_dotenv()
+
 # Environment variable keys
-OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(base_url = 'http://127.0.0.1:1234/v1')
 
 # Grid and drawing settings
 GRID_SIZE = 2
@@ -28,78 +49,9 @@ FONT_FALLBACK_FACTOR = 0.25   # Used if truetype font fails
 # Mouse movement settings
 MOUSE_MOVE_DURATION = 0.5
 
-# GPT-4 Vision API settings
-MODEL_NAME = "gpt-4o"
-SYSTEM_PROMPT_TEXT = """
-As a fully autonomous computer agent, your job is to execute the user's request by interacting with their computer.
-You will be provided with an image of the screen and must analyze it to determine the correct actions.
+MODEL_NAME = "qwen2-vl-7b-instruct"
 
-Your interactive capabilities include:
-- Mouse clicks
-- Typing
-- Mouse movement
-
-You must provide your response as a JSON object with the following keys:
-- 'reasoning' (string): Explain your thought process in detail, including verification of the cursor's position relative to the target object.
-- 'action' (string): The next action to be performed (e.g., 'move_mouse', 'click', 'type').
-- 'actionValue' (string or number): The value associated with the action (e.g., grid number, text to type, or null).
-
-Important Notes:
-- The mouse cursor is always in the center of the provided image.
-- Before clicking an object, verify that the cursor (the center of the image) is indeed on top of the intended object.
-- When moving the mouse, choose the grid cell that most accurately brings the cursor over the object’s center.
-- After each non-mouse movement action (like a click or type), the screen image will zoom out fully.
-- Provide thorough reasoning especially when determining if the cursor is correctly positioned or if further movement is needed.
-
-Example of responses:
-
-User Request: "Play a song by Pink Floyd"
-
-Response 1:
-{
-    "reasoning": "The user requested to play a song by Pink Floyd. I first inspect the screen image and notice that the Apple Music icon is visible in the dock. Let me ask myself if the current cursor position is on top of the apple music icon. No, it's not right now. I need to move the mouse. I determine that moving the cursor to grid cell 3 will position the cursor closer to the Apple Music icon",
-    "actionValue": 3
-}
-
-Response 2:
-{
-    "reasoning": "After just having moved the mouse, I now check the zoomed-in view of grid cell 3. Is the cursor over the safari icon? No. I verify that the cursor needs to move closer to the safari icon, which is in grid 2. I will now move the mouse to grid cell 2.",
-    "action": "move_mouse",
-    "actionValue": 2
-}
-
-Response 3:
-{
-    "reasoning": "After moving the mouse, I now check the zoomed-in view of grid cell 2. Is the cursor position right on top of the safari icon? Yes. Since the cursor is properly positioned, I can safely execute a click action.",
-    "action": "click",
-    "actionValue": null
-}
-
-Response 4:
-{
-    "reasoning": "With the Apple Music app open, I see the search bar on the screen. Currently, the cursor is in the center and not on the search bar. I analyze the image and determine that moving the mouse to grid cell 1 will place the cursor directly over the search bar. I confirm that the center of grid cell 1 corresponds with the search bar before executing the move.",
-    "action": "move_mouse",
-    "actionValue": 1
-}
-
-Response 5:
-{
-    "reasoning": "The mouse has moved, and now the zoomed-in view shows that the cursor is centered on the search bar. I carefully check the boundaries of the search bar to ensure the cursor is truly within it. Since it is, I will now click to focus the search bar.",
-    "action": "click",
-    "actionValue": null
-}
-
-Response 6:
-{
-    "reasoning": "After clicking, the search bar is active and ready for input. The next step is to type 'Pink Floyd' into the search bar. I verify that the search bar is selected and proceed to type.",
-    "action": "type",
-    "actionValue": "Pink Floyd"
-}
-"""
-# Default user prompt
-DEFAULT_PROMPT = "Open safari"
-
-load_dotenv()
+# -------------------------------- Create Grid ------------------------------- #
 
 def add_grid_and_numbers(image, grid_size=GRID_SIZE):
     """Add grid lines and numbers to the image."""
@@ -135,6 +87,8 @@ def add_grid_and_numbers(image, grid_size=GRID_SIZE):
             draw.text((x, y), text, fill=GRID_COLOR, font=font)
 
     return img_copy
+
+# ----------------------------- Image Processing ----------------------------- #
 
 def encode_image_to_base64(image):
     """Convert a PIL Image to a base64 string."""
@@ -192,13 +146,13 @@ def move_mouse_to_cell(cell_number, region_offset, region_size, grid_size=GRID_S
     print(f"Moving mouse to cell {cell_number} at ({center_x}, {center_y})")
     pyautogui.moveTo(center_x, center_y, duration=duration)
 
+
+# ------------------------------ Vision API call ----------------------------- #
+
 def GPT_Vision_Call(prompt=DEFAULT_PROMPT, image=None, message_history=None):
     """
     Sends the conversation (including full history) along with the current prompt and image to GPT-4 Vision.
     """
-    api_key = os.getenv(OPENAI_API_KEY_ENV)
-    if not api_key:
-        raise ValueError(f"API Key not found. Ensure you have a .env file with {OPENAI_API_KEY_ENV} set.")
 
     base64_image = encode_image_to_base64(image)
 
@@ -210,12 +164,10 @@ def GPT_Vision_Call(prompt=DEFAULT_PROMPT, image=None, message_history=None):
         ]
     })
 
-    client = OpenAI(api_key=api_key)
-
     try:
         response = client.chat.completions.create(
             model=MODEL_NAME,
-            response_format={"type": "json_object"},
+            # response_format={"type": "json_object"},
             messages=message_history,
             max_tokens=500
         )
@@ -240,6 +192,9 @@ def capture_screenshot_with_cursor(output_file="screenshot.png"):
     """Capture a screenshot including the mouse cursor using macOS's screencapture command."""
     subprocess.run(["screencapture", "-C", output_file], check=True)
     return Image.open(output_file)
+
+
+# ----------------------------------- MAIN ----------------------------------- #
 
 def main():
     prompt = DEFAULT_PROMPT  # This can be dynamic or come from another source
