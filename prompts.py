@@ -43,4 +43,6 @@ Example 3 – Typing:
 Follow these instructions exactly. When you respond, output only the JSON object with no additional text.
 """
 # Default user prompt
-DEFAULT_PROMPT = "Use spotlight on the screen and go to google.com"
+DEFAULT_PROMPT = "Move mouse to the grid which has 'OE1 vision' folder. If mouse is already on the target, click. If you don't see the safari icon return null"
+
+VALIDATION_PROMPT = "Is the mouse cursor visible in this image? Please respond with a JSON object containing 'isMouseVisible': true/false and 'description' of what you see."

@@ -7,9 +7,7 @@ import subprocess
 
 import pyautogui
 from PIL import Image, ImageGrab, ImageDraw, ImageFont
-from openai import OpenAI
-from dotenv import load_dotenv
-from prompts import SYSTEM_PROMPT_TEXT, DEFAULT_PROMPT
+from prompts import SYSTEM_PROMPT_TEXT, DEFAULT_PROMPT, VALIDATION_PROMPT
 
 
 # ---------------------------------------------------------------------------- #
@@ -26,10 +24,14 @@ from prompts import SYSTEM_PROMPT_TEXT, DEFAULT_PROMPT
 # TODO: Create bite maker for complex tasks.
 
 # TODO: Create router to decide if task is complex or direct.
- 
-# =============================================================================
-# Constants
-# =============================================================================
+
+
+# ---------------------------------------------------------------------------- #
+#                                 OPENAI STUFF                                 #
+# ---------------------------------------------------------------------------- #
+
+from openai import OpenAI
+from dotenv import load_dotenv
 
 
 load_dotenv()
@@ -38,10 +40,55 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 client = OpenAI(base_url = 'http://127.0.0.1:1234/v1')
 
+def GPT_Vision_Call(prompt=DEFAULT_PROMPT, image=None, message_history=None):
+    """
+    Sends the conversation (including full history) along with the current prompt and image to GPT-4 Vision.
+    """
+
+    base64_image = encode_image_to_base64(image)
+
+    message_history.append({
+        "role": "user",
+        "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
+        ]
+    })
+
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            # response_format={"type": "json_object"},
+            messages=message_history,
+            max_tokens=500
+        )
+        # Get assistant's message and add it to the conversation history.
+        assistant_message = response.choices[0].message.content
+        message_history.append({
+            "role": "assistant",
+            "content": assistant_message
+        })
+
+        return assistant_message, message_history
+
+    except Exception as e:
+        error_msg = json.dumps({"error": str(e)})
+        message_history.append({
+            "role": "assistant",
+            "content": error_msg
+        })
+        return error_msg, message_history
+
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+
 # Grid and drawing settings
-GRID_SIZE = 2
+GRID_SIZE = 4
 GRID_COLOR = "red"
-GRID_LINE_WIDTH = 2
+GRID_LINE_WIDTH = 4
 
 FONT_SIZE_FACTOR = 0.5      # Used when the truetype font is available
 FONT_FALLBACK_FACTOR = 0.25   # Used if truetype font fails
@@ -149,44 +196,7 @@ def move_mouse_to_cell(cell_number, region_offset, region_size, grid_size=GRID_S
 
 # ------------------------------ Vision API call ----------------------------- #
 
-def GPT_Vision_Call(prompt=DEFAULT_PROMPT, image=None, message_history=None):
-    """
-    Sends the conversation (including full history) along with the current prompt and image to GPT-4 Vision.
-    """
 
-    base64_image = encode_image_to_base64(image)
-
-    message_history.append({
-        "role": "user",
-        "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
-        ]
-    })
-
-    try:
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            # response_format={"type": "json_object"},
-            messages=message_history,
-            max_tokens=500
-        )
-        # Get assistant's message and add it to the conversation history.
-        assistant_message = response.choices[0].message.content
-        message_history.append({
-            "role": "assistant",
-            "content": assistant_message
-        })
-
-        return assistant_message, message_history
-
-    except Exception as e:
-        error_msg = json.dumps({"error": str(e)})
-        message_history.append({
-            "role": "assistant",
-            "content": error_msg
-        })
-        return error_msg, message_history
 
 def capture_screenshot_with_cursor(output_file="screenshot.png"):
     """Capture a screenshot including the mouse cursor using macOS's screencapture command."""
@@ -195,6 +205,21 @@ def capture_screenshot_with_cursor(output_file="screenshot.png"):
 
 
 # ----------------------------------- MAIN ----------------------------------- #
+
+def validate_mouse_position(image, message_history):
+    """
+    Ask the LLM to validate if the mouse cursor is visible in the provided image.
+    """
+    
+    response, message_history = GPT_Vision_Call(VALIDATION_PROMPT, image, message_history)
+    print("Validation Response:", response)
+    
+    try:
+        parsed_response = json.loads(response)
+        return parsed_response.get("isMouseVisible", False), message_history
+    except Exception as e:
+        print("Error parsing validation response:", e)
+        return False, message_history
 
 def main():
     prompt = DEFAULT_PROMPT  # This can be dynamic or come from another source
@@ -264,6 +289,26 @@ def main():
             cell_number = int(action_value)
             move_mouse_to_cell(cell_number, current_offset, current_region_size, grid_size=GRID_SIZE, duration=MOUSE_MOVE_DURATION, scale=scale)
             print(f"Moved mouse to cell {cell_number}.")
+            
+            # Capture new screenshot for validation
+            validation_screenshot = capture_screenshot_with_cursor()
+            
+            # Crop to the cell where the mouse should be
+            cell_width = current_region_size[0] // GRID_SIZE
+            cell_height = current_region_size[1] // GRID_SIZE
+            row = (cell_number - 1) // GRID_SIZE
+            col = (cell_number - 1) % GRID_SIZE
+            validation_region = validation_screenshot.crop((
+                current_offset[0] + col * cell_width,
+                current_offset[1] + row * cell_height,
+                current_offset[0] + (col + 1) * cell_width,
+                current_offset[1] + (row + 1) * cell_height
+            ))
+            
+            # Validate mouse position
+            is_mouse_visible, message_history = validate_mouse_position(validation_region, message_history)
+            if not is_mouse_visible:
+                print("Warning: Mouse cursor not detected in the expected cell!")
 
         if action == "click":
             pyautogui.click()
