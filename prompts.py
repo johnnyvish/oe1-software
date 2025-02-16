@@ -43,6 +43,18 @@ Example 3 – Typing:
 Follow these instructions exactly. When you respond, output only the JSON object with no additional text.
 """
 # Default user prompt
-DEFAULT_PROMPT = "Move mouse to the grid which has 'OE1 vision' folder. If mouse is already on the target, click. If you don't see the safari icon return null"
+DEFAULT_PROMPT = "Move mouse to the grid which has 'Apple music' icon. If mouse is already on the target, click. If you don't see the safari icon return null"
 
-VALIDATION_PROMPT = "Is the mouse cursor visible in this image? Please respond with a JSON object containing 'isMouseVisible': true/false and 'description' of what you see."
+VALIDATION_PROMPT = """Carefully analyze this cropped image and verify if BOTH of these conditions are met:
+1. The mouse cursor is clearly visible in the image
+2. The mouse cursor is precisely positioned over the Safari icon
+
+Respond with a JSON object containing:
+- "isMouseVisible": true only if BOTH conditions above are met, false otherwise
+- "description": Detailed description of what you see, including:
+  - Whether you can see the mouse cursor
+  - Whether you can see the Safari icon
+  - The precise position of the cursor relative to the Safari icon
+  - Any uncertainty in your assessment
+
+Be extremely conservative - if there's any doubt or if either condition isn't met perfectly, respond with false."""

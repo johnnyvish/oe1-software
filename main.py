@@ -40,44 +40,71 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 client = OpenAI(base_url = 'http://127.0.0.1:1234/v1')
 
+# Add this to the Constants section
+USE_MESSAGE_HISTORY = False  # New flag to control message history
+
 def GPT_Vision_Call(prompt=DEFAULT_PROMPT, image=None, message_history=None):
     """
     Sends the conversation (including full history) along with the current prompt and image to GPT-4 Vision.
     """
-
     base64_image = encode_image_to_base64(image)
-
-    message_history.append({
-        "role": "user",
-        "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
+    
+    # Create the message list based on USE_MESSAGE_HISTORY flag
+    if USE_MESSAGE_HISTORY and message_history:
+        messages = message_history
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
+            ]
+        })
+    else:
+        # Just use system prompt and current message
+        messages = [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT_TEXT
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
+                ]
+            }
         ]
-    })
 
     try:
         response = client.chat.completions.create(
             model=MODEL_NAME,
-            # response_format={"type": "json_object"},
-            messages=message_history,
-            max_tokens=500
+            messages=messages,
+            # max_tokens=500
+            temperature=0.0
         )
-        # Get assistant's message and add it to the conversation history.
+        # Get assistant's message
         assistant_message = response.choices[0].message.content
-        message_history.append({
-            "role": "assistant",
-            "content": assistant_message
-        })
-
-        return assistant_message, message_history
+        
+        # Only update message history if we're using it
+        if USE_MESSAGE_HISTORY and message_history is not None:
+            message_history.append({
+                "role": "assistant",
+                "content": assistant_message
+            })
+            return assistant_message, message_history
+        else:
+            return assistant_message, None
 
     except Exception as e:
         error_msg = json.dumps({"error": str(e)})
-        message_history.append({
-            "role": "assistant",
-            "content": error_msg
-        })
-        return error_msg, message_history
+        if USE_MESSAGE_HISTORY and message_history is not None:
+            message_history.append({
+                "role": "assistant",
+                "content": error_msg
+            })
+            return error_msg, message_history
+        else:
+            return error_msg, None
 
 
 # =============================================================================
@@ -86,9 +113,9 @@ def GPT_Vision_Call(prompt=DEFAULT_PROMPT, image=None, message_history=None):
 
 
 # Grid and drawing settings
-GRID_SIZE = 4
+GRID_SIZE = 3
 GRID_COLOR = "red"
-GRID_LINE_WIDTH = 4
+GRID_LINE_WIDTH = 3
 
 FONT_SIZE_FACTOR = 0.5      # Used when the truetype font is available
 FONT_FALLBACK_FACTOR = 0.25   # Used if truetype font fails
@@ -96,7 +123,7 @@ FONT_FALLBACK_FACTOR = 0.25   # Used if truetype font fails
 # Mouse movement settings
 MOUSE_MOVE_DURATION = 0.5
 
-MODEL_NAME = "qwen2-vl-7b-instruct"
+MODEL_NAME = "os-atlas-base-7b"
 
 # -------------------------------- Create Grid ------------------------------- #
 
@@ -208,18 +235,45 @@ def capture_screenshot_with_cursor(output_file="screenshot.png"):
 
 def validate_mouse_position(image, message_history):
     """
-    Ask the LLM to validate if the mouse cursor is visible in the provided image.
+    Ask the LLM to validate if the mouse cursor is visible and precisely positioned.
+    Requires two consecutive positive validations before clicking.
     """
+    validations_needed = 2
+    successful_validations = 0
     
-    response, message_history = GPT_Vision_Call(VALIDATION_PROMPT, image, message_history)
-    print("Validation Response:", response)
+    for _ in range(validations_needed):
+        # Capture a fresh screenshot each time
+        validation_screenshot = capture_screenshot_with_cursor()
+        # Crop to the same region as the input image
+        validation_region = validation_screenshot.crop(image.getbbox())
+        
+        response, message_history = GPT_Vision_Call(VALIDATION_PROMPT, validation_region, message_history)
+        print("Validation Response:", response)
+        
+        try:
+            parsed_response = json.loads(response)
+            is_mouse_visible = parsed_response.get("isMouseVisible", False)
+            description = parsed_response.get("description", "")
+            
+            if is_mouse_visible:
+                successful_validations += 1
+                print(f"Validation {successful_validations}/{validations_needed} successful")
+                if successful_validations < validations_needed:
+                    time.sleep(0.5)  # Wait briefly before next validation
+            else:
+                print(f"Validation failed: {description}")
+                return False, message_history
+                
+        except Exception as e:
+            print("Error parsing validation response:", e)
+            return False, message_history
     
-    try:
-        parsed_response = json.loads(response)
-        return parsed_response.get("isMouseVisible", False), message_history
-    except Exception as e:
-        print("Error parsing validation response:", e)
-        return False, message_history
+    if successful_validations == validations_needed:
+        print("All validations successful - clicking automatically")
+        pyautogui.click()
+        return True, message_history
+    
+    return False, message_history
 
 def main():
     prompt = DEFAULT_PROMPT  # This can be dynamic or come from another source
@@ -305,16 +359,14 @@ def main():
                 current_offset[1] + (row + 1) * cell_height
             ))
             
-            # Validate mouse position
+            # Validate mouse position and click if valid
             is_mouse_visible, message_history = validate_mouse_position(validation_region, message_history)
             if not is_mouse_visible:
                 print("Warning: Mouse cursor not detected in the expected cell!")
+            else:
+                continue_zoom = False  # Reset zoom since we clicked
 
-        if action == "click":
-            pyautogui.click()
-            print("Mouse clicked on the cell.")
-            continue_zoom = False
-            
+        # Remove the separate click action since it's now handled in validation
         if action == "type":
             pyautogui.typewrite(action_value)
             print(f"Typed '{action_value}'")
